@@ -267,7 +267,7 @@ const STATUS = '@@status';
 function CollectionTable(
   props: CollectionPageContentProps & {
     trees: {
-      default: TreeData;
+      committed: TreeData;
       current: TreeData;
     };
   }
@@ -294,7 +294,7 @@ function CollectionTable(
       getEntriesInCollectionWithTreeKey(
         props.config,
         props.collection,
-        props.trees.default.tree
+        props.trees.committed.tree
       ).map(x => [x.slug, x.key])
     );
     return getEntriesInCollectionWithTreeKey(

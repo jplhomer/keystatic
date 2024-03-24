@@ -323,7 +323,7 @@ export function useUpsertItem(args: {
   ] as const;
 }
 
-const createCommitMutation = gql`
+export const createCommitMutation = gql`
   mutation CreateCommit($input: CreateCommitOnBranchInput!) {
     createCommitOnBranch(input: $input) {
       ref {
@@ -444,7 +444,7 @@ export function useDeleteItem(args: {
   ] as const;
 }
 
-const FetchRef = gql`
+export const FetchRef = gql`
   query FetchRef($owner: String!, $name: String!, $ref: String!) {
     repository(owner: $owner, name: $name) {
       id

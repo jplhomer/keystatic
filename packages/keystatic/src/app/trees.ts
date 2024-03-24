@@ -71,7 +71,7 @@ function getFilename(path: string) {
   return path.replace(/.*\//, '');
 }
 
-function getDirname(path: string) {
+export function getDirname(path: string) {
   if (!path.includes('/')) return '';
   return path.replace(/\/[^/]+$/, '');
 }
@@ -144,7 +144,7 @@ function hexToBytes(str: string) {
   return bytes;
 }
 
-async function createTreeNodeEntry(
+export async function createTreeNodeEntry(
   path: string,
   children: Map<string, TreeNode>
 ): Promise<TreeEntry> {
@@ -168,10 +168,15 @@ async function createBlobNodeEntry(
 export async function updateTreeWithChanges(
   tree: Map<string, TreeNode>,
   changes: Changes
-): Promise<{ entries: TreeEntry[]; sha: string }> {
+): Promise<{
+  tree: Map<string, TreeNode>;
+  entries: TreeEntry[];
+  sha: string;
+}> {
   const newTree =
     (await updateTree(tree, toTreeChanges(changes), [])) ?? new Map();
   return {
+    tree: newTree,
     entries: treeToEntries(newTree),
     sha: await treeSha(newTree ?? new Map()),
   };
@@ -224,6 +229,44 @@ async function updateTree(
   if (newTree.size === 0) {
     return undefined;
   }
+  return newTree;
+}
+
+export async function replaceEntryAtPathInTree(
+  tree: Map<string, TreeNode>,
+  newEntry: TreeNode,
+  parentPath: string
+): Promise<Map<string, TreeNode>> {
+  const newTree = new Map(tree);
+  if (!parentPath) {
+    newTree.set(newEntry.entry.path, newEntry);
+    return newTree;
+  }
+  const [firstPartOfTree, restOfPath] = parentPath.split('/', 1);
+  const parent = newTree.get(firstPartOfTree);
+  if (!parent || !parent.children) {
+    const innerEntry = await replaceEntryAtPathInTree(
+      new Map(),
+      newEntry,
+      restOfPath
+    );
+    const entry = await createTreeNodeEntry(firstPartOfTree, innerEntry);
+    newTree.set(firstPartOfTree, {
+      entry,
+      children: innerEntry,
+    });
+    return newTree;
+  }
+  const newChildren = await replaceEntryAtPathInTree(
+    parent.children,
+    newEntry,
+    restOfPath
+  );
+  const entry = await createTreeNodeEntry(firstPartOfTree, newChildren);
+  newTree.set(firstPartOfTree, {
+    entry,
+    children: newChildren,
+  });
   return newTree;
 }
 

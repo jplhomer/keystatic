@@ -27,7 +27,7 @@ import { serializeRepoConfig } from './repo-config';
 import {
   getBlobFromPersistedCache,
   setBlobToPersistedCache,
-} from './object-cache';
+} from './object-store';
 
 class TrackedMap<K, V> extends Map<K, V> {
   #onGet: (key: K) => void;
@@ -180,8 +180,11 @@ function getAllFilesInTree(tree: Map<string, TreeNode>): TreeEntry[] {
   );
 }
 
-export function useItemData(args: UseItemDataArgs) {
-  const { current: currentBranch } = useTree();
+export function useItemData(
+  args: UseItemDataArgs,
+  branch: 'current' | 'committed' = 'current'
+) {
+  const { [branch]: currentBranch } = useTree();
   const baseCommit = useBaseCommit();
   const isRepoPrivate = useIsRepoPrivate();
   const branchInfo = useBranchInfo();
@@ -206,7 +209,6 @@ export function useItemData(args: UseItemDataArgs) {
     return rootTree ?? new Map();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [localTreeKey, locationsForTreeKey]);
-
   const hasLoaded = currentBranch.kind === 'loaded';
 
   return useData(
@@ -353,12 +355,10 @@ export function fetchBlob(
 
   const promise = (async () => {
     const isLocal = config.storage.kind === 'local';
-    if (!isLocal) {
-      const stored = await getBlobFromPersistedCache(oid);
-      if (stored) {
-        blobCache.set(oid, stored);
-        return stored;
-      }
+    const stored = await getBlobFromPersistedCache(oid);
+    if (stored) {
+      blobCache.set(oid, stored);
+      return stored;
     }
     return (
       isLocal

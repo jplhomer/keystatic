@@ -11,6 +11,9 @@ import {
 } from 'idb-keyval';
 import { TreeNode } from './trees';
 import { z } from 'zod';
+import { ReactNode, createContext, useContext, useMemo, useState } from 'react';
+import { serializeRepoConfig } from './repo-config';
+import { Config } from '..';
 
 type StoredTreeEntry = {
   path: string;
@@ -121,7 +124,103 @@ export function getTreeFromPersistedCache(sha: string) {
   return stored.then(stored => constructTreeFromStoredTrees(sha, stored));
 }
 
-export async function garbageCollectGitObjects(roots: string[]) {
+const extraRootsSchema = z.record(
+  z.object({
+    sha: z.string(),
+    updatedAt: z.string().transform(x => new Date(x)),
+  })
+);
+
+const ExtraRootsContext = createContext<{
+  roots: Map<string, { sha: string; updatedAt: Date }>;
+  set: (branch: string, sha: string) => void;
+  remove: (branch: string) => void;
+}>({
+  roots: new Map(),
+  remove: () => {},
+  set: () => {},
+});
+
+export function useExtraRoots() {
+  return useContext(ExtraRootsContext);
+}
+
+export function ExtraRootsProvider(props: {
+  children: ReactNode;
+  config: Config;
+}) {
+  const [roots, setRoots] = useState<
+    Map<string, { sha: string; updatedAt: Date }>
+  >(() => getExtraRoots(props.config));
+
+  const context = useMemo(() => {
+    const setVal = (map: Map<string, { sha: string; updatedAt: Date }>) => {
+      setRoots(map);
+      const key =
+        props.config.storage.kind === 'local'
+          ? 'local'
+          : props.config.storage.kind === 'github'
+          ? serializeRepoConfig(props.config.storage.repo)
+          : props.config.cloud?.project || 'cloud';
+      localStorage.setItem(
+        `ks-roots-${key}`,
+        JSON.stringify(
+          Object.fromEntries(
+            [...map].map(([k, v]) => [
+              k,
+              { sha: v.sha, updatedAt: v.updatedAt.toISOString() },
+            ])
+          )
+        )
+      );
+    };
+    return {
+      roots,
+      set: (branch: string, sha: string) => {
+        setVal(new Map(roots).set(branch, { sha, updatedAt: new Date() }));
+      },
+      remove: (branch: string) => {
+        const newRoots = new Map(roots);
+        newRoots.delete(branch);
+        setVal(newRoots);
+      },
+    };
+  }, [props.config, roots]);
+  return (
+    <ExtraRootsContext.Provider value={context}>
+      {props.children}
+    </ExtraRootsContext.Provider>
+  );
+}
+export function getExtraRoots(
+  config: Config
+): Map<string, { sha: string; updatedAt: Date }> {
+  const key =
+    config.storage.kind === 'local'
+      ? 'local'
+      : config.storage.kind === 'github'
+      ? serializeRepoConfig(config.storage.repo)
+      : config.cloud?.project || 'cloud';
+  const val = localStorage.getItem(`ks-roots-${key}`);
+  if (!val) return new Map();
+  try {
+    const parsed = JSON.parse(val);
+    const result = extraRootsSchema.parse(parsed);
+    console.log(result);
+    return new Map(Object.entries(result));
+  } catch {
+    return new Map();
+  }
+}
+
+export async function garbageCollectGitObjects(
+  config: Config,
+  _roots: string[]
+) {
+  const roots = [
+    ..._roots,
+    ...[...getExtraRoots(config).values()].map(x => x.sha),
+  ];
   const treesToDelete = new Map<string, StoredTreeEntry[]>();
   const invalidTrees: IDBValidKey[] = [];
   for (const [sha, tree] of await getStoredTrees()) {
@@ -166,6 +265,11 @@ export function setTreeToPersistedCache(
 ) {
   const allTrees: [string, StoredTreeEntry[]][] = [];
   collectTrees(sha, children, allTrees);
+  if (_storedTreeCache) {
+    for (const [key, value] of allTrees) {
+      _storedTreeCache.set(key, value);
+    }
+  }
   return setMany(allTrees, getTreeStore());
 }
 
@@ -188,6 +292,15 @@ function collectTrees(
   allTrees.push([sha, entries]);
 }
 
-export async function clearObjectCache() {
+export async function clearObjectStore(config: Config) {
+  localStorage.removeItem(
+    `ks-roots-${
+      config.storage.kind === 'local'
+        ? 'local'
+        : config.storage.kind === 'github'
+        ? serializeRepoConfig(config.storage.repo)
+        : config.cloud?.project || 'cloud'
+    }`
+  );
   await Promise.all([clear(getBlobStore()), clear(getTreeStore())]);
 }
