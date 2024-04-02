@@ -29,7 +29,12 @@ import { Config } from '../../config';
 
 import { BranchPicker } from '../branch-selection';
 import { useRouter } from '../router';
-import { getPathPrefix, pluralize } from '../utils';
+import {
+  getCollectionFormat,
+  getPathPrefix,
+  getSingletonFormat,
+  pluralize,
+} from '../utils';
 
 import { useAppState, useConfig } from './context';
 import {
@@ -57,6 +62,7 @@ import {
 import { getBlobFromPersistedCache } from '../object-store';
 import { fromUint8Array } from 'js-base64';
 import { createUrqlClient } from '../provider';
+import { parseEntry } from '../useItemData';
 
 const typeMap = {
   added: {
@@ -74,7 +80,13 @@ const typeMap = {
 } as const;
 
 type ChangeType = keyof typeof typeMap;
-type Change = { href: string; slug: string; type: ChangeType };
+type Change = {
+  href: string;
+  type: ChangeType;
+} & (
+  | { kind: 'collection'; slug: string; collection: string }
+  | { kind: 'singleton'; singleton: string }
+);
 
 export function BatchCommits() {
   return (
@@ -393,7 +405,6 @@ function BatchCommitsDialog() {
         elementType="form"
         id={formId}
         onSubmit={event => {
-          console.log(event.target, event.currentTarget);
           if (event.target !== event.currentTarget) return;
           event.preventDefault();
         }}
@@ -456,7 +467,18 @@ function BatchCommitsDialog() {
           flex={items.length > 0}
         >
           {item => (
-            <Item key={item.slug} textValue={`${item.slug}, ${item.type}`}>
+            <Item
+              key={`${item.kind}/${
+                item.kind === 'collection'
+                  ? item.collection + '/' + item.slug
+                  : item.singleton
+              }`}
+              textValue={`${item.kind}/${
+                item.kind === 'collection'
+                  ? item.collection + '/' + item.slug
+                  : item.singleton
+              }, ${item.type}`}
+            >
               <HStack
                 gridArea="content"
                 alignItems="center"
@@ -465,15 +487,41 @@ function BatchCommitsDialog() {
               >
                 {item.type === 'removed' ? (
                   <Text color="color.alias.foregroundDisabled">
-                    {item.slug}
+                    {item.kind === 'collection'
+                      ? item.collection + '/' + item.slug
+                      : item.singleton}
                   </Text>
                 ) : (
-                  <TextLink href={item.href}>{item.slug}</TextLink>
+                  <TextLink href={item.href}>
+                    {item.kind === 'collection'
+                      ? item.collection + '/' + item.slug
+                      : item.singleton}
+                  </TextLink>
                 )}
                 <ChangeTypeIndicator type={item.type} />
               </HStack>
               <TooltipTrigger>
-                <ActionButton aria-label="Revert." marginStart="regular">
+                <ActionButton
+                  aria-label="Revert."
+                  marginStart="regular"
+                  onPress={() => {
+                    const collectionConfig =
+                      config.collections[item.collection];
+                    parseEntry({
+                      config,
+                      dirpath: item.slug,
+                      slug,
+                      format:
+                        item.kind === 'collection'
+                          ? getCollectionFormat(config, item.collection)
+                          : getSingletonFormat(config, item.singleton),
+                      schema:
+                        item.kind === 'collection'
+                          ? config.collections[item.collection].schema
+                          : config.singletons[item.singleton].schema,
+                    });
+                  }}
+                >
                   <Icon src={undoIcon} />
                 </ActionButton>
                 <Tooltip>Revert changes to item</Tooltip>
@@ -607,7 +655,9 @@ function getChangedItems(
         items.push(
           ...Array.from(counts.changed).map(slug => ({
             href: getCollectionItemHref(basePath, key, slug),
-            slug: `${key}/${slug}`,
+            slug,
+            kind: 'collection' as const,
+            collection: key,
             type: 'changed' as const,
           }))
         );
@@ -616,7 +666,9 @@ function getChangedItems(
         items.push(
           ...Array.from(counts.added).map(slug => ({
             href: getCollectionItemHref(basePath, key, slug),
-            slug: `${key}/${slug}`,
+            slug,
+            kind: 'collection' as const,
+            collection: key,
             type: 'added' as const,
           }))
         );
@@ -625,8 +677,10 @@ function getChangedItems(
         items.push(
           ...Array.from(counts.removed).map(slug => ({
             href: getCollectionItemHref(basePath, key, slug),
-            slug: `${key}/${slug}`,
             type: 'removed' as const,
+            slug,
+            kind: 'collection' as const,
+            collection: key,
           }))
         );
       }
@@ -634,17 +688,18 @@ function getChangedItems(
   }
 
   if (config.singletons) {
-    for (const slug of Object.keys(config.singletons)) {
-      let changes = changeMap.singletons.has(slug);
+    for (const singleton of Object.keys(config.singletons)) {
+      let changes = changeMap.singletons.has(singleton);
 
       if (!changes) {
         continue;
       }
 
       items.push({
-        href: `${basePath}/singleton/${encodeURIComponent(slug)}`,
-        slug,
+        href: `${basePath}/singleton/${encodeURIComponent(singleton)}`,
         type: 'changed' as const,
+        kind: 'singleton',
+        singleton,
       });
     }
   }

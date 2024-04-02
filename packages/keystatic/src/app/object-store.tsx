@@ -9,11 +9,12 @@ import {
   get,
   clear,
 } from 'idb-keyval';
-import { TreeNode } from './trees';
+import { TreeNode, getTreeNodeAtPath, updateTreeWithChanges } from './trees';
 import { z } from 'zod';
 import { ReactNode, createContext, useContext, useMemo, useState } from 'react';
 import { serializeRepoConfig } from './repo-config';
 import { Config } from '..';
+import { hydrateBlobCache } from './useItemData';
 
 type StoredTreeEntry = {
   path: string;
@@ -303,4 +304,41 @@ export async function clearObjectStore(config: Config) {
     }`
   );
   await Promise.all([clear(getBlobStore()), clear(getTreeStore())]);
+}
+
+export async function writeChangesToLocalObjectStore(opts: {
+  additions: { path: string; contents: Uint8Array }[];
+  initialFiles: string[];
+  extraRoots: ReturnType<typeof useExtraRoots>;
+  unscopedTree: Map<string, TreeNode>;
+  currentBranch: string;
+}) {
+  const additionPathToSha = new Map(
+    await Promise.all(
+      opts.additions.map(
+        async addition =>
+          [addition.path, await hydrateBlobCache(addition.contents)] as const
+      )
+    )
+  );
+
+  const filesToDelete = new Set(opts.initialFiles);
+  for (const file of opts.additions) {
+    filesToDelete.delete(file.path);
+  }
+
+  const additions = opts.additions.filter(addition => {
+    const sha = additionPathToSha.get(addition.path)!;
+    const existing = getTreeNodeAtPath(opts.unscopedTree, addition.path);
+    return existing?.entry.sha !== sha;
+  });
+
+  const updatedTree = await updateTreeWithChanges(opts.unscopedTree, {
+    additions,
+    deletions: [...filesToDelete],
+  });
+  if (updatedTree.sha !== opts.extraRoots.roots.get(opts.currentBranch)?.sha) {
+    await setTreeToPersistedCache(updatedTree.sha, updatedTree.tree);
+    opts.extraRoots.set(opts.currentBranch, updatedTree.sha);
+  }
 }

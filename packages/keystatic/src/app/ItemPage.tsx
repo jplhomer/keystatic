@@ -52,7 +52,7 @@ import {
   useCurrentUnscopedTree,
 } from './shell/data';
 import { serializeEntryToFiles } from './updating';
-import { hydrateBlobCache, useItemData } from './useItemData';
+import { useItemData } from './useItemData';
 import { useHasChanged } from './useHasChanged';
 import {
   getBranchPrefix,
@@ -71,8 +71,12 @@ import * as Y from 'yjs';
 import { getYjsValFromParsedValue } from '../form/props-value';
 import { useYJsValue } from './useYJsValue';
 import { createGetPreviewPropsFromY } from '../form/preview-props-yjs';
-import { setTreeToPersistedCache, useExtraRoots } from './object-store';
-import { getTreeNodeAtPath, updateTreeWithChanges } from './trees';
+import {
+  setTreeToPersistedCache,
+  useExtraRoots,
+  writeChangesToLocalObjectStore,
+} from './object-store';
+import { updateTreeWithChanges } from './trees';
 import { getInitialPropsValue } from '../form/initial-values';
 
 type ItemPageProps = {
@@ -228,55 +232,26 @@ function LocalItemPage(props: ItemPageProps) {
   useEffect(() => {
     if (unscopedTreeData.kind !== 'loaded') return;
     const unscopedTree = unscopedTreeData.data.tree;
-    (async () => {
-      const pathPrefix = getPathPrefix(config.storage) ?? '';
-      let additions = serializeEntryToFiles({
-        basePath: futureBasePath,
-        config,
-        format: getCollectionFormat(config, collection),
-        schema: collectionConfig.schema,
-        slug: { field: collectionConfig.slugField, value: slug },
-        state,
-      }).map(addition => ({
-        ...addition,
-        path: pathPrefix + addition.path,
-      }));
-      const additionPathToSha = new Map(
-        await Promise.all(
-          additions.map(
-            async addition =>
-              [
-                addition.path,
-                await hydrateBlobCache(addition.contents),
-              ] as const
-          )
-        )
-      );
+    const pathPrefix = getPathPrefix(config.storage) ?? '';
+    let additions = serializeEntryToFiles({
+      basePath: futureBasePath,
+      config,
+      format: getCollectionFormat(config, collection),
+      schema: collectionConfig.schema,
+      slug: { field: collectionConfig.slugField, value: slug },
+      state,
+    }).map(addition => ({
+      ...addition,
+      path: pathPrefix + addition.path,
+    }));
 
-      const filesToDelete = new Set(
-        props.initialFiles?.map(x => pathPrefix + x)
-      );
-      for (const file of additions) {
-        filesToDelete.delete(file.path);
-      }
-
-      additions = additions.filter(addition => {
-        const sha = additionPathToSha.get(addition.path)!;
-        const existing = getTreeNodeAtPath(unscopedTree, addition.path);
-        return existing?.entry.sha !== sha;
-      });
-
-      const updatedTree = await updateTreeWithChanges(unscopedTree, {
-        additions,
-        deletions: [...filesToDelete],
-      });
-      if (
-        updatedTree.sha !== extraRoots.roots.get(branchInfo.currentBranch)?.sha
-      ) {
-        await setTreeToPersistedCache(updatedTree.sha, updatedTree.tree);
-        extraRoots.set(branchInfo.currentBranch, updatedTree.sha);
-      }
-    })();
+    writeChangesToLocalObjectStore({
+      additions,
+      initialFiles: props.initialFiles.map(x => pathPrefix + x),
+      currentBranch: branchInfo.currentBranch,
+      extraRoots,
+      unscopedTree,
+    });
   }, [
     collection,
     collectionConfig,
